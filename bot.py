@@ -65,8 +65,11 @@ def sms(msg: str):
         email["From"]    = GMAIL_ADDRESS
         email["To"]      = YOUR_PHONE
         email["Subject"] = ""
-        log.info("Connecting to smtp.gmail.com:465...")
-        with smtplib.SMTP_SSL("smtp.gmail.com", 465) as server:
+        log.info("Connecting to smtp.gmail.com:587...")
+        with smtplib.SMTP("smtp.gmail.com", 587) as server:
+            server.ehlo()
+            server.starttls()
+            server.ehlo()
             log.info("Connected. Logging in...")
             server.login(GMAIL_ADDRESS, GMAIL_APP_PASSWORD)
             log.info("Logged in. Sending...")
