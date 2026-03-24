@@ -13,11 +13,13 @@ import logging
 from datetime import datetime, timedelta
 import schedule
 
+import smtplib
+from email.mime.text import MIMEText
+
 import alpaca_trade_api as tradeapi
 import pandas as pd
 import pandas_ta as ta
 import requests
-from twilio.rest import Client
 
 # ── Logging ──────────────────────────────────────────────────────────────────
 logging.basicConfig(
@@ -32,10 +34,9 @@ ALPACA_API_KEY    = os.environ["ALPACA_API_KEY"]
 ALPACA_SECRET_KEY = os.environ["ALPACA_SECRET_KEY"]
 ALPACA_BASE_URL   = os.environ.get("ALPACA_BASE_URL", "https://paper-api.alpaca.markets")
 
-TWILIO_SID        = os.environ["TWILIO_ACCOUNT_SID"]
-TWILIO_TOKEN      = os.environ["TWILIO_AUTH_TOKEN"]
-TWILIO_FROM       = os.environ["TWILIO_FROM_NUMBER"]   # e.g. +12015551234
-YOUR_PHONE        = os.environ["YOUR_PHONE_NUMBER"]    # e.g. +12055559876
+GMAIL_ADDRESS     = os.environ["GMAIL_ADDRESS"]
+GMAIL_APP_PASSWORD = os.environ["GMAIL_APP_PASSWORD"]
+YOUR_PHONE        = os.environ["YOUR_PHONE_NUMBER"]    # e.g. 2055551234@txt.att.net
 
 NEWS_API_KEY      = os.environ.get("NEWS_API_KEY", "")  # optional but recommended
 
@@ -47,7 +48,6 @@ WATCHLIST_FILE    = "watchlist.json"
 
 # ── Clients ───────────────────────────────────────────────────────────────────
 api    = tradeapi.REST(ALPACA_API_KEY, ALPACA_SECRET_KEY, ALPACA_BASE_URL)
-twilio = Client(TWILIO_SID, TWILIO_TOKEN)
 
 # ── In-memory position tracker  (entry_price per ticker) ─────────────────────
 open_alerts: dict[str, float] = {}   # { "AAPL": 182.50 }
@@ -58,9 +58,15 @@ open_alerts: dict[str, float] = {}   # { "AAPL": 182.50 }
 # ─────────────────────────────────────────────────────────────────────────────
 
 def sms(msg: str):
-    """Send an SMS alert."""
+    """Send an SMS via Gmail email-to-SMS gateway."""
     try:
-        twilio.messages.create(body=msg, from_=TWILIO_FROM, to=YOUR_PHONE)
+        email = MIMEText(msg)
+        email["From"]    = GMAIL_ADDRESS
+        email["To"]      = YOUR_PHONE
+        email["Subject"] = ""
+        with smtplib.SMTP_SSL("smtp.gmail.com", 465) as server:
+            server.login(GMAIL_ADDRESS, GMAIL_APP_PASSWORD)
+            server.sendmail(GMAIL_ADDRESS, YOUR_PHONE, email.as_string())
         log.info(f"SMS sent: {msg[:60]}...")
     except Exception as e:
         log.error(f"SMS failed: {e}")
