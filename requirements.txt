@@ -1,9 +1,9 @@
 alpaca-trade-api==3.2.0
-pandas==2.2.2
+pandas>=2.3.2
 pandas_ta==0.4.71b0
-requests==2.31.0
-schedule==1.2.1
-twilio==8.13.0
-lxml==5.2.1
-html5lib==1.1
-beautifulsoup4==4.12.3
+requests>=2.31.0
+schedule>=1.2.1
+twilio>=8.13.0
+lxml>=5.2.1
+html5lib>=1.1
+beautifulsoup4>=4.12.3
