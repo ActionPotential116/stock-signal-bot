@@ -1,4 +1,4 @@
-alpaca-trade-api==3.3.2
+alpaca-trade-api==3.2.0
 pandas==2.2.2
 pandas_ta==0.3.14b
 requests==2.31.0
