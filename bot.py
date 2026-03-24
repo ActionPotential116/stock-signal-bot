@@ -13,9 +13,6 @@ import logging
 from datetime import datetime, timedelta
 import schedule
 
-import smtplib
-from email.mime.text import MIMEText
-
 import alpaca_trade_api as tradeapi
 import pandas as pd
 import requests
@@ -33,9 +30,8 @@ ALPACA_API_KEY    = os.environ["ALPACA_API_KEY"]
 ALPACA_SECRET_KEY = os.environ["ALPACA_SECRET_KEY"]
 ALPACA_BASE_URL   = os.environ.get("ALPACA_BASE_URL", "https://paper-api.alpaca.markets")
 
-GMAIL_ADDRESS     = os.environ["GMAIL_ADDRESS"]
-GMAIL_APP_PASSWORD = os.environ["GMAIL_APP_PASSWORD"]
-YOUR_PHONE        = os.environ["YOUR_PHONE_NUMBER"]    # e.g. 2055551234@txt.att.net
+TELEGRAM_TOKEN    = os.environ["TELEGRAM_BOT_TOKEN"]
+TELEGRAM_CHAT_ID  = os.environ["TELEGRAM_CHAT_ID"]
 
 NEWS_API_KEY      = os.environ.get("NEWS_API_KEY", "")  # optional but recommended
 
@@ -57,26 +53,16 @@ open_alerts: dict[str, float] = {}   # { "AAPL": 182.50 }
 # ─────────────────────────────────────────────────────────────────────────────
 
 def sms(msg: str):
-    """Send an SMS via Gmail email-to-SMS gateway."""
+    """Send a Telegram message."""
     import traceback
-    log.info(f"SMS attempt to={YOUR_PHONE} from={GMAIL_ADDRESS}")
+    log.info("Sending Telegram message...")
     try:
-        email = MIMEText(msg)
-        email["From"]    = GMAIL_ADDRESS
-        email["To"]      = YOUR_PHONE
-        email["Subject"] = ""
-        log.info("Connecting to smtp.gmail.com:587...")
-        with smtplib.SMTP("smtp.gmail.com", 587) as server:
-            server.ehlo()
-            server.starttls()
-            server.ehlo()
-            log.info("Connected. Logging in...")
-            server.login(GMAIL_ADDRESS, GMAIL_APP_PASSWORD)
-            log.info("Logged in. Sending...")
-            server.sendmail(GMAIL_ADDRESS, YOUR_PHONE, email.as_string())
-        log.info(f"SMS sent OK: {msg[:60]}...")
+        url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
+        resp = requests.post(url, json={"chat_id": TELEGRAM_CHAT_ID, "text": msg}, timeout=10)
+        resp.raise_for_status()
+        log.info(f"Telegram sent OK: {msg[:60]}...")
     except Exception as e:
-        log.error(f"SMS failed [{type(e).__name__}]: {e}")
+        log.error(f"Telegram failed [{type(e).__name__}]: {e}")
         log.error(traceback.format_exc())
 
 
