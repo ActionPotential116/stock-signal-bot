@@ -18,7 +18,6 @@ from email.mime.text import MIMEText
 
 import alpaca_trade_api as tradeapi
 import pandas as pd
-import pandas_ta as ta
 import requests
 
 # ── Logging ──────────────────────────────────────────────────────────────────
@@ -59,17 +58,23 @@ open_alerts: dict[str, float] = {}   # { "AAPL": 182.50 }
 
 def sms(msg: str):
     """Send an SMS via Gmail email-to-SMS gateway."""
+    import traceback
+    log.info(f"SMS attempt to={YOUR_PHONE} from={GMAIL_ADDRESS}")
     try:
         email = MIMEText(msg)
         email["From"]    = GMAIL_ADDRESS
         email["To"]      = YOUR_PHONE
         email["Subject"] = ""
+        log.info("Connecting to smtp.gmail.com:465...")
         with smtplib.SMTP_SSL("smtp.gmail.com", 465) as server:
+            log.info("Connected. Logging in...")
             server.login(GMAIL_ADDRESS, GMAIL_APP_PASSWORD)
+            log.info("Logged in. Sending...")
             server.sendmail(GMAIL_ADDRESS, YOUR_PHONE, email.as_string())
-        log.info(f"SMS sent: {msg[:60]}...")
+        log.info(f"SMS sent OK: {msg[:60]}...")
     except Exception as e:
-        log.error(f"SMS failed: {e}")
+        log.error(f"SMS failed [{type(e).__name__}]: {e}")
+        log.error(traceback.format_exc())
 
 
 def load_watchlist() -> list[str]:
@@ -145,6 +150,25 @@ def get_sentiment(ticker: str) -> float:
 #  SIGNAL LOGIC
 # ─────────────────────────────────────────────────────────────────────────────
 
+def calc_rsi(close: pd.Series, period: int = 14) -> float:
+    """Calculate RSI manually."""
+    delta = close.diff()
+    gain  = delta.clip(lower=0).rolling(period).mean()
+    loss  = (-delta.clip(upper=0)).rolling(period).mean()
+    rs    = gain / loss.replace(0, 1e-10)
+    rsi   = 100 - (100 / (1 + rs))
+    return rsi.iloc[-1]
+
+
+def calc_macd(close: pd.Series):
+    """Calculate MACD line and signal line."""
+    ema12  = close.ewm(span=12, adjust=False).mean()
+    ema26  = close.ewm(span=26, adjust=False).mean()
+    macd   = ema12 - ema26
+    signal = macd.ewm(span=9, adjust=False).mean()
+    return macd, signal
+
+
 def check_entry_signals(ticker: str) -> bool:
     """
     ALL of the following must be true for an entry alert:
@@ -162,17 +186,11 @@ def check_entry_signals(ticker: str) -> bool:
     volume = bars["volume"]
 
     # 1 — RSI
-    rsi = ta.rsi(close, length=14)
-    if rsi is None or rsi.iloc[-1] > 40:
+    if calc_rsi(close) > 40:
         return False
 
     # 2 — MACD crossover
-    macd_df = ta.macd(close)
-    if macd_df is None:
-        return False
-    macd_line   = macd_df["MACD_12_26_9"]
-    signal_line = macd_df["MACDs_12_26_9"]
-    # crossed above = macd > signal NOW and macd <= signal one bar ago
+    macd_line, signal_line = calc_macd(close)
     if not (macd_line.iloc[-1] > signal_line.iloc[-1] and
             macd_line.iloc[-2] <= signal_line.iloc[-2]):
         return False
