@@ -13,7 +13,7 @@ import logging
 from datetime import datetime, timedelta
 import schedule
 
-import alpaca_trade_api as tradeapi
+import yfinance as yf
 import pandas as pd
 import requests
 
@@ -26,9 +26,7 @@ logging.basicConfig(
 log = logging.getLogger(__name__)
 
 # ── Config from environment ───────────────────────────────────────────────────
-ALPACA_API_KEY    = os.environ["ALPACA_API_KEY"].strip()
-ALPACA_SECRET_KEY = os.environ["ALPACA_SECRET_KEY"].strip()
-ALPACA_BASE_URL   = os.environ.get("ALPACA_BASE_URL", "https://paper-api.alpaca.markets").strip()
+# No API key needed for yfinance
 
 TELEGRAM_TOKEN    = os.environ["TELEGRAM_BOT_TOKEN"]
 TELEGRAM_CHAT_ID  = os.environ["TELEGRAM_CHAT_ID"]
@@ -42,7 +40,6 @@ STOP_LOSS         = float(os.environ.get("STOP_LOSS",     "0.02"))   # 2%
 WATCHLIST_FILE    = "watchlist.json"
 
 # ── Clients ───────────────────────────────────────────────────────────────────
-api    = tradeapi.REST(ALPACA_API_KEY, ALPACA_SECRET_KEY, ALPACA_BASE_URL)
 
 # ── In-memory position tracker  (entry_price per ticker) ─────────────────────
 open_alerts: dict[str, float] = {}   # { "AAPL": 182.50 }
@@ -119,18 +116,13 @@ def get_sp500_tickers() -> list[str]:
 
 
 def get_bars(ticker: str, limit: int = 60) -> pd.DataFrame | None:
-    """Fetch recent 5-min bars from Alpaca."""
+    """Fetch recent 5-min bars from Yahoo Finance."""
     try:
-        bars = api.get_bars(
-            ticker,
-            tradeapi.rest.TimeFrame.Minute,
-            limit=limit,
-            adjustment="raw"
-        ).df
-        if bars.empty:
+        bars = yf.download(ticker, period="1d", interval="5m", progress=False, auto_adjust=True)
+        if bars is None or bars.empty:
             return None
-        bars = bars.tz_convert("US/Eastern")
-        return bars
+        bars.columns = [c[0].lower() if isinstance(c, tuple) else c.lower() for c in bars.columns]
+        return bars.tail(limit)
     except Exception as e:
         log.warning(f"Bar fetch failed for {ticker}: {e}")
         return None
