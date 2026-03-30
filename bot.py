@@ -26,9 +26,9 @@ logging.basicConfig(
 log = logging.getLogger(__name__)
 
 # ── Config from environment ───────────────────────────────────────────────────
-ALPACA_API_KEY    = os.environ["ALPACA_API_KEY"]
-ALPACA_SECRET_KEY = os.environ["ALPACA_SECRET_KEY"]
-ALPACA_BASE_URL   = os.environ.get("ALPACA_BASE_URL", "https://paper-api.alpaca.markets")
+ALPACA_API_KEY    = os.environ["ALPACA_API_KEY"].strip()
+ALPACA_SECRET_KEY = os.environ["ALPACA_SECRET_KEY"].strip()
+ALPACA_BASE_URL   = os.environ.get("ALPACA_BASE_URL", "https://paper-api.alpaca.markets").strip()
 
 TELEGRAM_TOKEN    = os.environ["TELEGRAM_BOT_TOKEN"]
 TELEGRAM_CHAT_ID  = os.environ["TELEGRAM_CHAT_ID"]
