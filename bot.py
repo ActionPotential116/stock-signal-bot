@@ -310,6 +310,130 @@ def scan():
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+#  BACKTEST
+# ─────────────────────────────────────────────────────────────────────────────
+
+def run_backtest(ticker: str, period: str = "1y") -> str:
+    """Run backtest on a ticker and return a summary string."""
+    valid_periods = ["6mo", "1y", "2y"]
+    if period not in valid_periods:
+        period = "1y"
+
+    bars = get_daily_bars(ticker.upper(), period=period)
+    if bars is None or len(bars) < 50:
+        return f"Could not fetch data for {ticker.upper()}. Check the ticker and try again."
+
+    close  = bars["close"]
+    volume = bars["volume"]
+    n      = len(close)
+
+    rsi             = calc_rsi(close)
+    macd_line, sig  = calc_macd(close)
+    ma200           = close.rolling(min(200, n)).mean()
+    vol20           = volume.rolling(20).mean().shift(1)
+
+    PROFIT_PCT = float(os.environ.get("PROFIT_TARGET", "0.07"))
+    STOP_PCT   = float(os.environ.get("STOP_LOSS", "0.03"))
+    MAX_HOLD   = 10
+
+    trades   = []
+    in_trade = False
+    entry_i  = None
+    entry_px = None
+    start_i  = min(205, n - 2)
+
+    dates = bars.index
+
+    for i in range(start_i, n):
+        if not in_trade:
+            ok_200  = close.iloc[i] > ma200.iloc[i]
+            ok_rsi  = float(rsi.iloc[i]) < 35
+            ok_macd = macd_line.iloc[i] > sig.iloc[i] and macd_line.iloc[i-1] <= sig.iloc[i-1]
+            ok_vol  = vol20.iloc[i] and volume.iloc[i] > 1.5 * vol20.iloc[i]
+
+            if ok_200 and ok_rsi and ok_macd and ok_vol:
+                in_trade = True
+                entry_i  = i
+                entry_px = float(close.iloc[i])
+        else:
+            pct  = (float(close.iloc[i]) - entry_px) / entry_px
+            held = i - entry_i
+            reason = None
+            if pct >= PROFIT_PCT:  reason = "profit"
+            elif pct <= -STOP_PCT: reason = "stop"
+            elif held >= MAX_HOLD: reason = "timeout"
+            if reason:
+                trades.append({"pct": pct * 100, "held": held, "reason": reason,
+                               "entry": dates[entry_i].strftime("%m/%d"), "exit": dates[i].strftime("%m/%d")})
+                in_trade = False
+
+    if in_trade:
+        pct = (float(close.iloc[-1]) - entry_px) / entry_px
+        trades.append({"pct": pct * 100, "held": n - 1 - entry_i, "reason": "open",
+                       "entry": dates[entry_i].strftime("%m/%d"), "exit": "open"})
+
+    if not trades:
+        return f"No signals found for {ticker.upper()} over {period}. The setup may be too strict for this stock."
+
+    closed   = [t for t in trades if t["reason"] != "open"]
+    wins     = [t for t in closed if t["pct"] > 0]
+    win_rate = len(wins) / len(closed) * 100 if closed else 0
+    avg_ret  = sum(t["pct"] for t in closed) / len(closed) if closed else 0
+    equity   = 100.0
+    for t in closed:
+        equity *= (1 + t["pct"] / 100)
+
+    lines = [f"📊 BACKTEST: {ticker.upper()} ({period})"]
+    lines.append(f"Trades:    {len(trades)} ({len(closed)} closed)")
+    lines.append(f"Win rate:  {win_rate:.1f}%")
+    lines.append(f"Avg return: {'+' if avg_ret >= 0 else ''}{avg_ret:.2f}%")
+    lines.append(f"Equity:    $100 → ${equity:.2f}")
+    lines.append("")
+    lines.append("Trade log:")
+    for t in trades[-15:]:  # last 15 trades max to keep message short
+        sign = "+" if t["pct"] >= 0 else ""
+        lines.append(f"  {t['entry']}→{t['exit']}  {sign}{t['pct']:.1f}%  [{t['reason']}]")
+    if len(trades) > 15:
+        lines.append(f"  ... and {len(trades)-15} earlier trades")
+
+    return "
+".join(lines)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+#  TELEGRAM COMMAND LISTENER
+# ─────────────────────────────────────────────────────────────────────────────
+
+last_update_id = 0
+
+def check_telegram_commands():
+    """Poll Telegram for incoming messages and handle /backtest commands."""
+    global last_update_id
+    try:
+        url  = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/getUpdates?offset={last_update_id + 1}&timeout=5"
+        resp = requests.get(url, timeout=10).json()
+        updates = resp.get("result", [])
+        for update in updates:
+            last_update_id = update["update_id"]
+            msg = update.get("message", {})
+            text = msg.get("text", "").strip()
+            if text.lower().startswith("/backtest"):
+                parts = text.split()
+                ticker = parts[1].upper() if len(parts) > 1 else None
+                period = parts[2] if len(parts) > 2 else "1y"
+                if not ticker:
+                    notify("Usage: /backtest TICKER PERIOD
+Example: /backtest AAPL 1y
+Periods: 6mo, 1y, 2y")
+                else:
+                    notify(f"Running backtest for {ticker} ({period})... give me a moment.")
+                    result = run_backtest(ticker, period)
+                    notify(result)
+    except Exception as e:
+        log.warning(f"Telegram poll failed: {e}")
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 #  SCHEDULER
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -325,4 +449,5 @@ if __name__ == "__main__":
 
     while True:
         schedule.run_pending()
+        check_telegram_commands()
         time.sleep(30)
