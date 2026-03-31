@@ -162,6 +162,14 @@ def calc_rsi(close: pd.Series, period: int = 14) -> float:
     return float(rsi.iloc[-1])
 
 
+def calc_rsi_series(close: pd.Series, period: int = 14) -> pd.Series:
+    delta = close.diff()
+    gain  = delta.clip(lower=0).rolling(period).mean()
+    loss  = (-delta.clip(upper=0)).rolling(period).mean()
+    rs    = gain / loss.replace(0, 1e-10)
+    return 100 - (100 / (1 + rs))
+
+
 def calc_macd(close: pd.Series):
     ema12  = close.ewm(span=12, adjust=False).mean()
     ema26  = close.ewm(span=26, adjust=False).mean()
@@ -327,7 +335,7 @@ def run_backtest(ticker: str, period: str = "1y") -> str:
     volume = bars["volume"]
     n      = len(close)
 
-    rsi             = calc_rsi(close)
+    rsi             = calc_rsi_series(close)
     macd_line, sig  = calc_macd(close)
     ma200           = close.rolling(min(200, n)).mean()
     vol20           = volume.rolling(20).mean().shift(1)
