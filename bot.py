@@ -266,6 +266,73 @@ def check_exit_signals(ticker: str, entry_price: float) -> str | None:
     return None
 
 
+
+SECTOR_ETF = {
+    "XLB": ["LIN","APD","ECL","DD","PPG","NEM","FCX","NUE","ALB","CE","MOS","VMC","MLM","FMC","IFF","EMN","CF"],
+    "XLC": ["META","GOOGL","GOOG","NFLX","TTWO","EA","MTCH","OMC","IPG","NWSA","NWS","FOXA","FOX","LYV","CHTR","TMUS","T","VZ","CMCSA","DIS"],
+    "XLY": ["AMZN","TSLA","HD","MCD","NKE","LOW","SBUX","TJX","BKNG","ORLY","CMG","MAR","DHI","LEN","PHM","GM","F","APTV","ROST","EBAY","KMX","CCL","RCL","NCLH","LVS","WYNN","MGM","CZR","TPR","RL","BBWI","LKQ","POOL","HLT","MGM"],
+    "XLP": ["PG","KO","PEP","COST","WMT","PM","MO","MDLZ","CL","GIS","KMB","SYY","STZ","KR","HSY","MKC","CHD","CLX","KHC","TAP","CAG","HRL","SJM","CPB"],
+    "XLE": ["XOM","CVX","COP","EOG","SLB","MPC","PSX","VLO","PXD","OXY","HAL","DVN","FANG","HES","APA","BKR","MRO","CTRA","EQT","TRGP"],
+    "XLF": ["BRK-B","JPM","BAC","WFC","MS","GS","BLK","SCHW","AXP","C","USB","PNC","TFC","COF","CB","MMC","AON","MET","PRU","AFL","ALL","HIG","AIG","CINF","GL","WRB","RJF","FITB","HBAN","MTB","RF","KEY","CFG","STT","BK","NTRS","ICE","CME","CBOE","SPGI","MCO","MSCI","FIS","FI","PYPL","V","MA"],
+    "XLV": ["UNH","JNJ","LLY","ABBV","MRK","TMO","ABT","DHR","BMY","AMGN","ISRG","MDT","CVS","CI","ELV","HUM","MOH","CNC","BIIB","VRTX","REGN","ILMN","IQV","DGX","LH","BAX","BDX","EW","HOLX","HSIC","XRAY","STE","RMD","ZBH","MTD","A","IDXX","PODD","INCY","MRNA","RVTY"],
+    "XLI": ["HON","UPS","CAT","DE","RTX","LMT","BA","GE","MMM","ITW","CSX","NSC","UNP","FDX","EMR","ETN","GD","NOC","HII","L3H","TDG","TT","CARR","OTIS","PH","ROK","IR","AME","FAST","PCAR","CTAS","ODFL","JBHT","XYL","LDOS","J","HWM","TDY","TXT","LHX","AXON","GWW","SNA","SWK","BLDR","MAS","AOS","ALLE","WM","RSG","TRMB","NDSN","ROL"],
+    "XLK": ["AAPL","MSFT","NVDA","AVGO","AMD","ORCL","CSCO","ADBE","QCOM","TXN","INTU","IBM","AMAT","NOW","ADI","KLAC","LRCX","SNPS","CDNS","MCHP","TEL","APH","MSI","KEYS","ANSS","FFIV","NTAP","WDC","STX","HPE","HPQ","JNPR","CDW","IT","GRMN","TRMB","EPAM","GEN","AKAM","GDDY"],
+    "XLU": ["NEE","SO","DUK","AEP","EXC","SRE","D","PCG","ED","XEL","ES","WEC","ETR","PPL","CMS","LNT","AEE","NI","EVRG","PNW","NRG","CEG","ATO","AWK"],
+    "XLRE": ["PLD","AMT","EQIX","CCI","PSA","SPG","O","DLR","WELL","AVB","EQR","MAA","UDR","CPT","ESS","ARE","BXP","VTR","IRM","SBAC","INVH","EXR","CSGP","VICI","REG","FRT","HST","DOC"],
+}
+
+def get_sector_etf(ticker: str) -> str | None:
+    for etf, tickers in SECTOR_ETF.items():
+        if ticker in tickers:
+            return etf
+    return None
+
+
+def get_sector_status(ticker: str) -> str:
+    etf = get_sector_etf(ticker)
+    if not etf:
+        return "Sector: Unknown"
+    try:
+        bars = get_daily_bars(etf, period="3mo")
+        if bars is None or len(bars) < 55:
+            return f"Sector ({etf}): No data"
+        close = bars["close"]
+        ma50  = float(close.rolling(50).mean().iloc[-1])
+        price = float(close.iloc[-1])
+        if price > ma50:
+            return f"Sector ({etf}): Above 50MA — healthy"
+        else:
+            return f"Sector ({etf}): Below 50MA — weak"
+    except Exception:
+        return f"Sector ({etf}): Error fetching"
+
+
+def get_earnings_status(ticker: str) -> str:
+    try:
+        stock = yf.Ticker(ticker)
+        cal   = stock.calendar
+        if cal is None or cal.empty:
+            return "Earnings: Date unknown"
+        # calendar returns a DataFrame with dates as columns
+        if hasattr(cal, "columns"):
+            dates = cal.columns.tolist()
+        else:
+            dates = []
+        if not dates:
+            return "Earnings: Date unknown"
+        next_earn = pd.Timestamp(dates[0])
+        today     = pd.Timestamp.now().normalize()
+        days_away = (next_earn - today).days
+        date_str  = next_earn.strftime("%b %d")
+        if days_away < 0:
+            return f"Earnings: Recently passed ({date_str})"
+        elif days_away <= 7:
+            return f"Earnings: {days_away} days away — {date_str} CAUTION"
+        else:
+            return f"Earnings: {days_away} days away — {date_str} safe"
+    except Exception:
+        return "Earnings: Date unknown"
+
 # ─────────────────────────────────────────────────────────────────────────────
 #  SCAN
 # ─────────────────────────────────────────────────────────────────────────────
@@ -322,7 +389,13 @@ def scan():
                 if score:
                     conf_line = f"Backtest: {score['win_rate']:.0f}% win rate | {score['trades']}t | $100->$"+f"{score['equity']:.0f}"
                 else:
-                    conf_line = "Backtest: UNTESTED (run /batchtest to score)"
+                    conf_line = "Backtest: UNTESTED (run /batchtest)"
+
+                sector_line   = get_sector_status(ticker)
+                earnings_line = get_earnings_status(ticker)
+
+                sector_icon   = "✅" if "healthy" in sector_line else "⚠️" if "weak" in sector_line else "❓"
+                earn_icon     = "⚠️" if "CAUTION" in earnings_line else "📅"
 
                 msg = (
                     f"📈 SWING ENTRY: {ticker}\n"
@@ -331,7 +404,9 @@ def scan():
                     f"Stop:   ${stop_price} (-2.5%)\n"
                     f"Hold:   2-5 days\n"
                     f"Signals: 50/200MA + RSI rising + Green candle + VOL\n"
-                    f"{conf_line}"
+                    f"{conf_line}\n"
+                    f"{sector_icon} {sector_line}\n"
+                    f"{earn_icon} {earnings_line}"
                 )
                 notify(msg)
                 log.info(f"Entry signal: {ticker} @ ${price:.2f}")
