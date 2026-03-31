@@ -189,12 +189,13 @@ def calc_ma(close: pd.Series, period: int) -> float:
 def check_entry_signals(ticker: str) -> bool:
     """
     Swing trade entry — ALL must be true:
-      1. Price is above the 200-day MA  (confirmed uptrend — #1 win rate filter)
-      2. RSI(14) < 45                   (meaningful pullback in an uptrending stock)
-      3. RSI(14) > 25                   (not in freefall — avoid catching falling knives)
-      4. Volume today > 1.5x 20-day avg (real conviction behind the move)
-      5. Sentiment >= 0                 (no negative news headwind)
-    Note: MACD removed — lags too much on daily bars and hurts win rate
+      1. 50MA > 200MA                   (golden cross — medium AND long term uptrend)
+      2. Price is above the 200-day MA  (confirmed long-term uptrend)
+      3. RSI(14) between 25-45          (meaningful pullback, not in freefall)
+      4. RSI is rising vs yesterday     (momentum already turning up — not still falling)
+      5. Today closed green (close > open) (selling pressure done, buyers stepping in)
+      6. Volume today > 1.5x 20-day avg (real conviction behind the move)
+      7. Sentiment >= 0                 (no negative news headwind)
     """
     bars = get_daily_bars(ticker)
     if bars is None or len(bars) < 210:
@@ -202,23 +203,43 @@ def check_entry_signals(ticker: str) -> bool:
 
     close  = bars["close"]
     volume = bars["volume"]
+    open_  = bars["open"]
 
-    # 1 — Above 200MA (only trade stocks in an uptrend)
+    # 1 — 50MA above 200MA (golden cross — both trends pointing up)
+    ma50  = calc_ma(close, 50)
     ma200 = calc_ma(close, 200)
+    if ma50 <= ma200:
+        return False
+
+    # 2 — Price above 200MA
     if close.iloc[-1] <= ma200:
         return False
 
-    # 2 & 3 — RSI in the sweet spot: pulled back but not collapsing
-    rsi = calc_rsi(close)
-    if rsi > 45 or rsi < 25:
+    # 3 — RSI in the sweet spot
+    rsi_series = close.diff()
+    gain = rsi_series.clip(lower=0).rolling(14).mean()
+    loss = (-rsi_series.clip(upper=0)).rolling(14).mean()
+    rs   = gain / loss.replace(0, 1e-10)
+    rsi_full = 100 - (100 / (1 + rs))
+    rsi_today      = float(rsi_full.iloc[-1])
+    rsi_yesterday  = float(rsi_full.iloc[-2])
+    if rsi_today > 45 or rsi_today < 25:
         return False
 
-    # 4 — Volume confirmation (1.5x avg)
+    # 4 — RSI rising (momentum turning up)
+    if rsi_today <= rsi_yesterday:
+        return False
+
+    # 5 — Today closed green (close above open)
+    if close.iloc[-1] <= open_.iloc[-1]:
+        return False
+
+    # 6 — Volume confirmation
     avg_vol = volume.iloc[-21:-1].mean()
     if volume.iloc[-1] < 1.5 * avg_vol:
         return False
 
-    # 5 — Sentiment
+    # 7 — Sentiment
     if get_sentiment(ticker) < 0:
         return False
 
@@ -299,7 +320,7 @@ def scan():
                     f"Target: ${target_price} (+7%)\n"
                     f"Stop:   ${stop_price} (-3%)\n"
                     f"Hold:   2-5 days\n"
-                    f"Signals: 200MA + RSI(25-45) + VOL"
+                    f"Signals: 50/200MA + RSI rising + Green candle + VOL"
                 )
                 notify(msg)
                 log.info(f"Entry signal: {ticker} @ ${price:.2f}")
@@ -331,12 +352,12 @@ def run_backtest(ticker: str, period: str = "1y") -> str:
     n      = len(close)
 
     rsi             = calc_rsi_series(close)
-    macd_line, sig  = calc_macd(close)
+    ma50            = close.rolling(50).mean()
     ma200           = close.rolling(min(200, n)).mean()
     vol20           = volume.rolling(20).mean().shift(1)
 
-    PROFIT_PCT = float(os.environ.get("PROFIT_TARGET", "0.07"))
-    STOP_PCT   = float(os.environ.get("STOP_LOSS", "0.03"))
+    PROFIT_PCT = float(os.environ.get("PROFIT_TARGET", "0.08"))
+    STOP_PCT   = float(os.environ.get("STOP_LOSS", "0.025"))
     MAX_HOLD   = 10
 
     trades   = []
@@ -346,14 +367,18 @@ def run_backtest(ticker: str, period: str = "1y") -> str:
     start_i  = min(205, n - 2)
 
     dates = bars.index
+    open_ = bars["open"]
 
     for i in range(start_i, n):
         if not in_trade:
-            ok_200  = close.iloc[i] > ma200.iloc[i]
-            ok_rsi  = 25 < float(rsi.iloc[i]) < 45
-            ok_vol  = vol20.iloc[i] and volume.iloc[i] > 1.5 * vol20.iloc[i]
+            ok_cross = ma50.iloc[i] > ma200.iloc[i]
+            ok_200   = close.iloc[i] > ma200.iloc[i]
+            ok_rsi   = 25 < float(rsi.iloc[i]) < 45
+            ok_rsi_rising = float(rsi.iloc[i]) > float(rsi.iloc[i-1])
+            ok_green = close.iloc[i] > open_.iloc[i]
+            ok_vol   = vol20.iloc[i] and volume.iloc[i] > 1.5 * vol20.iloc[i]
 
-            if ok_200 and ok_rsi and ok_vol:
+            if ok_cross and ok_200 and ok_rsi and ok_rsi_rising and ok_green and ok_vol:
                 in_trade = True
                 entry_i  = i
                 entry_px = float(close.iloc[i])
