@@ -478,10 +478,10 @@ def run_batch_backtest(tickers: list, period: str = "1y") -> str:
                 if not in_trade:
                     ok_cross     = ma50.iloc[i] > ma200.iloc[i]
                     ok_200       = close.iloc[i] > ma200.iloc[i]
-                    ok_rsi       = 25 < float(rsi_full.iloc[i]) < 45
+                    ok_rsi        = 25 < float(rsi_full.iloc[i]) < 50
                     ok_rsi_rising = float(rsi_full.iloc[i]) > float(rsi_full.iloc[i-1])
-                    ok_green     = close.iloc[i] > open_.iloc[i]
-                    ok_vol       = vol20.iloc[i] and volume.iloc[i] > 1.5 * vol20.iloc[i]
+                    ok_green      = close.iloc[i] > open_.iloc[i]
+                    ok_vol        = vol20.iloc[i] and volume.iloc[i] > 1.3 * vol20.iloc[i]
 
                     if ok_cross and ok_200 and ok_rsi and ok_rsi_rising and ok_green and ok_vol:
                         in_trade = True
@@ -499,7 +499,7 @@ def run_batch_backtest(tickers: list, period: str = "1y") -> str:
                         in_trade = False
 
             closed = [t for t in trades if t["reason"] != "open"]
-            if len(closed) < 2:
+            if len(closed) < 1:
                 continue
 
             wins     = [t for t in closed if t["pct"] > 0]
@@ -520,12 +520,12 @@ def run_batch_backtest(tickers: list, period: str = "1y") -> str:
     lines.append("─" * 36)
     for ticker, wr, avg, n in results:
         sign = "+" if avg >= 0 else ""
-        flag = " ✅" if wr >= 60 else ""
+        flag = " ✅" if wr >= 60 and avg > 0 else ""
         lines.append(f"{ticker:<6} {wr:.0f}%  {sign}{avg:.1f}% avg  {n}t{flag}")
 
-    above60 = [r for r in results if r[1] >= 60]
+    above60 = [r for r in results if r[1] >= 60 and r[2] > 0]
     lines.append("─" * 36)
-    lines.append(f"{len(above60)}/{len(results)} stocks above 60% win rate")
+    lines.append(f"{len(above60)}/{len(results)} stocks 60%+ win rate & positive avg")
 
     return "\n".join(lines)
 
