@@ -396,8 +396,7 @@ def run_backtest(ticker: str, period: str = "1y") -> str:
     if len(trades) > 15:
         lines.append(f"  ... and {len(trades)-15} earlier trades")
 
-    return "
-".join(lines)
+    return "\n".join(lines)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -422,9 +421,7 @@ def check_telegram_commands():
                 ticker = parts[1].upper() if len(parts) > 1 else None
                 period = parts[2] if len(parts) > 2 else "1y"
                 if not ticker:
-                    notify("Usage: /backtest TICKER PERIOD
-Example: /backtest AAPL 1y
-Periods: 6mo, 1y, 2y")
+                    notify("Usage: /backtest TICKER PERIOD\nExample: /backtest AAPL 1y\nPeriods: 6mo, 1y, 2y")
                 else:
                     notify(f"Running backtest for {ticker} ({period})... give me a moment.")
                     result = run_backtest(ticker, period)
