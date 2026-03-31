@@ -526,7 +526,7 @@ BATCH_50 = [
     "ORCL","IBM","RTX","HON","QCOM","GE","LOW","AMGN","INTU","CAT"
 ]
 
-def run_single_backtest_score(ticker: str, period: str = "2y") -> dict | None:
+def run_single_backtest_score(ticker: str, period: str = "3y") -> dict | None:
     """Run backtest on one ticker and return score dict or None if insufficient data."""
     try:
         bars = get_daily_bars(ticker, period=period)
@@ -653,9 +653,9 @@ def check_telegram_commands():
             if text.lower().startswith("/backtest"):
                 parts = text.split()
                 ticker = parts[1].upper() if len(parts) > 1 else None
-                period = parts[2] if len(parts) > 2 else "1y"
+                period = parts[2] if len(parts) > 2 else "3y"
                 if not ticker:
-                    notify("Usage: /backtest TICKER PERIOD\nExample: /backtest AAPL 1y\nPeriods: 6mo, 1y, 2y")
+                    notify("Usage: /backtest TICKER PERIOD\nExample: /backtest AAPL 3y\nPeriods: 6mo, 1y, 2y, 3y, 5y")
                 else:
                     notify(f"Running backtest for {ticker} ({period})...")
                     result = run_backtest(ticker, period)
@@ -663,9 +663,9 @@ def check_telegram_commands():
 
             elif text.lower().startswith("/batchtest"):
                 parts = text.split()
-                period = parts[1] if len(parts) > 1 and parts[1] in ["6mo","1y","2y"] else "2y"
+                period = parts[1] if len(parts) > 1 and parts[1] in ["6mo","1y","2y","3y","5y"] else "3y"
                 all_tickers = list(set(load_watchlist() + get_sp500_tickers()))
-                notify(f"Running batch backtest on {len(all_tickers)} tickers ({period})... this takes 5-10 minutes.")
+                notify(f"Running batch backtest on {len(all_tickers)} tickers ({period})... this takes 10-15 minutes.")
                 result = run_batch_backtest(all_tickers, period)
                 notify(result)
 
@@ -674,9 +674,9 @@ def check_telegram_commands():
                     "Commands:\n"
                     "/backtest TICKER PERIOD — backtest one stock\n"
                     "/batchtest PERIOD — backtest top 50 stocks\n"
-                    "Periods: 6mo, 1y, 2y\n"
-                    "Example: /backtest NVDA 2y\n"
-                    "Example: /batchtest 2y"
+                    "Periods: 6mo, 1y, 2y, 3y, 5y\n"
+                    "Example: /backtest NVDA 3y\n"
+                    "Example: /batchtest 3y"
                 )
 
     except Exception as e:
