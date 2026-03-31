@@ -248,8 +248,12 @@ def scan():
     log.info(f"Scan started at {now.strftime('%H:%M:%S')}")
 
     # Only run during market hours (9:35–15:55 ET)
-    if not (9 * 60 + 35 <= now.hour * 60 + now.minute <= 15 * 60 + 55):
-        log.info("Outside market hours — skipping.")
+    import pytz
+    et  = pytz.timezone("America/New_York")
+    now_et = datetime.now(et)
+    mins = now_et.hour * 60 + now_et.minute
+    if not (9 * 60 + 35 <= mins <= 15 * 60 + 55):
+        log.info(f"Outside market hours ET ({now_et.strftime('%H:%M')}) — skipping.")
         return
 
     watchlist   = load_watchlist()
@@ -311,7 +315,7 @@ def scan():
 
 if __name__ == "__main__":
     log.info("Stock Signal Bot (Swing Edition) started.")
-    notify("✅ Stock Signal Bot is online — swing trading mode, scanning daily after close.")
+    notify("✅ Stock Signal Bot is online — swing trading mode, scanning every 5 minutes during market hours.")
 
     # Scan every 5 minutes during market hours
     schedule.every(5).minutes.do(scan)
