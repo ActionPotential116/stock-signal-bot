@@ -49,12 +49,14 @@ confidence_scores: dict[str, dict] = {}
 # ─────────────────────────────────────────────────────────────────────────────
 
 def notify(msg: str):
-    """Send a Telegram message."""
+    """Send a Telegram message, splitting if over 4000 chars."""
     import traceback
     try:
-        url  = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
-        resp = requests.post(url, json={"chat_id": TELEGRAM_CHAT_ID, "text": msg}, timeout=10)
-        resp.raise_for_status()
+        url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
+        chunks = [msg[i:i+4000] for i in range(0, len(msg), 4000)]
+        for chunk in chunks:
+            resp = requests.post(url, json={"chat_id": TELEGRAM_CHAT_ID, "text": chunk}, timeout=10)
+            resp.raise_for_status()
         log.info(f"Telegram sent: {msg[:80]}...")
     except Exception as e:
         log.error(f"Telegram failed [{type(e).__name__}]: {e}")
