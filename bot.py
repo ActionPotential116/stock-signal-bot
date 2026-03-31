@@ -39,6 +39,10 @@ WATCHLIST_FILE   = "watchlist.json"
 # ── In-memory trade tracker ───────────────────────────────────────────────────
 open_alerts: dict[str, float] = {}   # { "AAPL": 182.50 }
 
+# ── Confidence scores from last batch backtest ────────────────────────────────
+# { "AAPL": {"win_rate": 67.0, "trades": 6, "equity": 106.2} }
+confidence_scores: dict[str, dict] = {}
+
 
 # ─────────────────────────────────────────────────────────────────────────────
 #  MESSAGING
@@ -314,13 +318,20 @@ def scan():
                 target_price = round(price * (1 + PROFIT_TARGET), 2)
                 stop_price   = round(price * (1 - STOP_LOSS), 2)
 
+                score = confidence_scores.get(ticker)
+                if score:
+                    conf_line = f"Backtest: {score['win_rate']:.0f}% win rate | {score['trades']}t | $100->$"+f"{score['equity']:.0f}"
+                else:
+                    conf_line = "Backtest: UNTESTED (run /batchtest to score)"
+
                 msg = (
                     f"📈 SWING ENTRY: {ticker}\n"
                     f"Price:  ${price:.2f}\n"
-                    f"Target: ${target_price} (+7%)\n"
-                    f"Stop:   ${stop_price} (-3%)\n"
+                    f"Target: ${target_price} (+8%)\n"
+                    f"Stop:   ${stop_price} (-2.5%)\n"
                     f"Hold:   2-5 days\n"
-                    f"Signals: 50/200MA + RSI rising + Green candle + VOL"
+                    f"Signals: 50/200MA + RSI rising + Green candle + VOL\n"
+                    f"{conf_line}"
                 )
                 notify(msg)
                 log.info(f"Entry signal: {ticker} @ ${price:.2f}")
@@ -440,92 +451,114 @@ BATCH_50 = [
     "ORCL","IBM","RTX","HON","QCOM","GE","LOW","AMGN","INTU","CAT"
 ]
 
+def run_single_backtest_score(ticker: str, period: str = "2y") -> dict | None:
+    """Run backtest on one ticker and return score dict or None if insufficient data."""
+    try:
+        bars = get_daily_bars(ticker, period=period)
+        if bars is None or len(bars) < 50:
+            return None
+
+        close  = bars["close"]
+        volume = bars["volume"]
+        open_  = bars["open"]
+        n      = len(close)
+
+        rsi_diff = close.diff()
+        gain = rsi_diff.clip(lower=0).rolling(14).mean()
+        loss = (-rsi_diff.clip(upper=0)).rolling(14).mean()
+        rs   = gain / loss.replace(0, 1e-10)
+        rsi_full = 100 - (100 / (1 + rs))
+
+        ma50  = close.rolling(50).mean()
+        ma200 = close.rolling(min(200, n)).mean()
+        vol20 = volume.rolling(20).mean().shift(1)
+
+        PROFIT_PCT = float(os.environ.get("PROFIT_TARGET", "0.08"))
+        STOP_PCT   = float(os.environ.get("STOP_LOSS", "0.025"))
+        MAX_HOLD   = 10
+
+        trades = []
+        in_trade = False
+        entry_i = None
+        entry_px = None
+        start_i = min(205, n - 2)
+
+        for i in range(start_i, n):
+            if not in_trade:
+                ok_cross      = ma50.iloc[i] > ma200.iloc[i]
+                ok_200        = close.iloc[i] > ma200.iloc[i]
+                ok_rsi        = 25 < float(rsi_full.iloc[i]) < 45
+                ok_rsi_rising = float(rsi_full.iloc[i]) > float(rsi_full.iloc[i-1])
+                ok_green      = close.iloc[i] > open_.iloc[i]
+                ok_vol        = vol20.iloc[i] and volume.iloc[i] > 1.5 * vol20.iloc[i]
+
+                if ok_cross and ok_200 and ok_rsi and ok_rsi_rising and ok_green and ok_vol:
+                    in_trade = True
+                    entry_i  = i
+                    entry_px = float(close.iloc[i])
+            else:
+                pct  = (float(close.iloc[i]) - entry_px) / entry_px
+                held = i - entry_i
+                reason = None
+                if pct >= PROFIT_PCT:  reason = "profit"
+                elif pct <= -STOP_PCT: reason = "stop"
+                elif held >= MAX_HOLD: reason = "timeout"
+                if reason:
+                    trades.append({"pct": pct * 100, "reason": reason})
+                    in_trade = False
+
+        closed = [t for t in trades if t["reason"] != "open"]
+        if len(closed) < 3:
+            return None
+
+        wins     = [t for t in closed if t["pct"] > 0]
+        win_rate = len(wins) / len(closed) * 100
+        avg_ret  = sum(t["pct"] for t in closed) / len(closed)
+        equity   = 100.0
+        for t in closed:
+            equity *= (1 + t["pct"] / 100)
+
+        return {"win_rate": round(win_rate, 1), "trades": len(closed), "equity": round(equity, 1), "avg_ret": round(avg_ret, 2)}
+    except Exception as e:
+        log.warning(f"Backtest score failed for {ticker}: {e}")
+        return None
+
+
 def run_batch_backtest(tickers: list, period: str = "1y") -> str:
-    """Run backtest on multiple tickers and return ranked summary."""
+    """Run backtest on multiple tickers, store confidence scores, return ranked summary."""
+    global confidence_scores
     results = []
-    for ticker in tickers:
-        try:
-            bars = get_daily_bars(ticker, period=period)
-            if bars is None or len(bars) < 50:
-                continue
-
-            close  = bars["close"]
-            volume = bars["volume"]
-            open_  = bars["open"]
-            n      = len(close)
-
-            rsi_diff = close.diff()
-            gain = rsi_diff.clip(lower=0).rolling(14).mean()
-            loss = (-rsi_diff.clip(upper=0)).rolling(14).mean()
-            rs   = gain / loss.replace(0, 1e-10)
-            rsi_full = 100 - (100 / (1 + rs))
-
-            ma50  = close.rolling(50).mean()
-            ma200 = close.rolling(min(200, n)).mean()
-            vol20 = volume.rolling(20).mean().shift(1)
-
-            PROFIT_PCT = float(os.environ.get("PROFIT_TARGET", "0.08"))
-            STOP_PCT   = float(os.environ.get("STOP_LOSS", "0.025"))
-            MAX_HOLD   = 10
-
-            trades = []
-            in_trade = False
-            entry_i = None
-            entry_px = None
-            start_i = min(205, n - 2)
-
-            for i in range(start_i, n):
-                if not in_trade:
-                    ok_cross     = ma50.iloc[i] > ma200.iloc[i]
-                    ok_200       = close.iloc[i] > ma200.iloc[i]
-                    ok_rsi        = 25 < float(rsi_full.iloc[i]) < 50
-                    ok_rsi_rising = float(rsi_full.iloc[i]) > float(rsi_full.iloc[i-1])
-                    ok_green      = close.iloc[i] > open_.iloc[i]
-                    ok_vol        = vol20.iloc[i] and volume.iloc[i] > 1.3 * vol20.iloc[i]
-
-                    if ok_cross and ok_200 and ok_rsi and ok_rsi_rising and ok_green and ok_vol:
-                        in_trade = True
-                        entry_i  = i
-                        entry_px = float(close.iloc[i])
-                else:
-                    pct  = (float(close.iloc[i]) - entry_px) / entry_px
-                    held = i - entry_i
-                    reason = None
-                    if pct >= PROFIT_PCT:  reason = "profit"
-                    elif pct <= -STOP_PCT: reason = "stop"
-                    elif held >= MAX_HOLD: reason = "timeout"
-                    if reason:
-                        trades.append({"pct": pct * 100, "reason": reason})
-                        in_trade = False
-
-            closed = [t for t in trades if t["reason"] != "open"]
-            if len(closed) < 1:
-                continue
-
-            wins     = [t for t in closed if t["pct"] > 0]
-            win_rate = len(wins) / len(closed) * 100
-            avg_ret  = sum(t["pct"] for t in closed) / len(closed)
-            results.append((ticker, win_rate, avg_ret, len(closed)))
-
-        except Exception as e:
-            log.warning(f"Batch backtest failed for {ticker}: {e}")
-            continue
-
+    for i, ticker in enumerate(tickers):
+        if i % 50 == 0 and i > 0:
+            log.info(f"Batch backtest progress: {i}/{len(tickers)}")
+        score = run_single_backtest_score(ticker, period)
+        if score:
+            confidence_scores[ticker] = score
+            results.append((ticker, score["win_rate"], score["avg_ret"], score["trades"], score["equity"]))
     if not results:
         return "No results found. Try a longer period."
 
-    results.sort(key=lambda x: x[1], reverse=True)
+    # Require at least 3 trades for statistical relevance
+    results = [r for r in results if r[3] >= 3]
+    if not results:
+        return "Not enough trades to rank. Try a longer period (2y recommended)."
 
-    lines = [f"BATCH BACKTEST ({period}) — top {len(results)} stocks"]
-    lines.append("─" * 36)
-    for ticker, wr, avg, n in results:
+    results.sort(key=lambda x: x[4], reverse=True)  # sort by final equity
+
+    lines = [f"BATCH BACKTEST ({period}) — min 3 trades"]
+    lines.append("─" * 42)
+    lines.append(f"{'TICKER':<6} {'WIN%':>5} {'AVG':>6} {'T':>3} {'$100->':>7}")
+    lines.append("─" * 42)
+    for ticker, wr, avg, n, equity in results:
         sign = "+" if avg >= 0 else ""
-        flag = " ✅" if wr >= 60 and avg > 0 else ""
-        lines.append(f"{ticker:<6} {wr:.0f}%  {sign}{avg:.1f}% avg  {n}t{flag}")
+        flag = " ✅" if wr >= 60 and equity > 100 else ""
+        lines.append(f"{ticker:<6} {wr:>4.0f}%  {sign}{avg:>4.1f}%  {n:>2}t  ${equity:>5.0f}{flag}")
 
-    above60 = [r for r in results if r[1] >= 60 and r[2] > 0]
-    lines.append("─" * 36)
-    lines.append(f"{len(above60)}/{len(results)} stocks 60%+ win rate & positive avg")
+    above60 = [r for r in results if r[1] >= 60 and r[4] > 100]
+    avg_equity = sum(r[4] for r in results) / len(results)
+    lines.append("─" * 42)
+    lines.append(f"{len(above60)}/{len(results)} stocks: 60%+ win & profitable")
+    lines.append(f"Avg $100 -> ${avg_equity:.0f} across all stocks")
 
     return "\n".join(lines)
 
@@ -555,9 +588,10 @@ def check_telegram_commands():
 
             elif text.lower().startswith("/batchtest"):
                 parts = text.split()
-                period = parts[1] if len(parts) > 1 and parts[1] in ["6mo","1y","2y"] else "1y"
-                notify(f"Running batch backtest on 50 tickers ({period})... this takes 2-3 minutes.")
-                result = run_batch_backtest(BATCH_50, period)
+                period = parts[1] if len(parts) > 1 and parts[1] in ["6mo","1y","2y"] else "2y"
+                all_tickers = list(set(load_watchlist() + get_sp500_tickers()))
+                notify(f"Running batch backtest on {len(all_tickers)} tickers ({period})... this takes 5-10 minutes.")
+                result = run_batch_backtest(all_tickers, period)
                 notify(result)
 
             elif text.lower() == "/help":
