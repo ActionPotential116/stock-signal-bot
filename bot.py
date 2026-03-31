@@ -31,8 +31,8 @@ TELEGRAM_TOKEN   = os.environ["TELEGRAM_BOT_TOKEN"]
 TELEGRAM_CHAT_ID = os.environ["TELEGRAM_CHAT_ID"]
 NEWS_API_KEY     = os.environ.get("NEWS_API_KEY", "")
 
-PROFIT_TARGET    = float(os.environ.get("PROFIT_TARGET", "0.07"))   # 7%
-STOP_LOSS        = float(os.environ.get("STOP_LOSS",     "0.03"))   # 3%
+PROFIT_TARGET    = float(os.environ.get("PROFIT_TARGET", "0.08"))   # 8%
+STOP_LOSS        = float(os.environ.get("STOP_LOSS",     "0.025"))  # 2.5%
 
 WATCHLIST_FILE   = "watchlist.json"
 
@@ -189,11 +189,12 @@ def calc_ma(close: pd.Series, period: int) -> float:
 def check_entry_signals(ticker: str) -> bool:
     """
     Swing trade entry — ALL must be true:
-      1. Price is above the 200-day MA  (confirmed uptrend)
-      2. RSI(14) < 35                   (pullback into oversold territory)
-      3. MACD line just crossed above signal line (momentum turning up)
+      1. Price is above the 200-day MA  (confirmed uptrend — #1 win rate filter)
+      2. RSI(14) < 45                   (meaningful pullback in an uptrending stock)
+      3. RSI(14) > 25                   (not in freefall — avoid catching falling knives)
       4. Volume today > 1.5x 20-day avg (real conviction behind the move)
       5. Sentiment >= 0                 (no negative news headwind)
+    Note: MACD removed — lags too much on daily bars and hurts win rate
     """
     bars = get_daily_bars(ticker)
     if bars is None or len(bars) < 210:
@@ -207,18 +208,12 @@ def check_entry_signals(ticker: str) -> bool:
     if close.iloc[-1] <= ma200:
         return False
 
-    # 2 — RSI oversold
+    # 2 & 3 — RSI in the sweet spot: pulled back but not collapsing
     rsi = calc_rsi(close)
-    if rsi > 35:
+    if rsi > 45 or rsi < 25:
         return False
 
-    # 3 — MACD crossover (bullish flip)
-    macd_line, signal_line = calc_macd(close)
-    if not (macd_line.iloc[-1] > signal_line.iloc[-1] and
-            macd_line.iloc[-2] <= signal_line.iloc[-2]):
-        return False
-
-    # 4 — Volume confirmation (1.5x avg, slightly looser for daily bars)
+    # 4 — Volume confirmation (1.5x avg)
     avg_vol = volume.iloc[-21:-1].mean()
     if volume.iloc[-1] < 1.5 * avg_vol:
         return False
@@ -304,7 +299,7 @@ def scan():
                     f"Target: ${target_price} (+7%)\n"
                     f"Stop:   ${stop_price} (-3%)\n"
                     f"Hold:   2-5 days\n"
-                    f"Signals: 200MA + RSI + MACD + VOL"
+                    f"Signals: 200MA + RSI(25-45) + VOL"
                 )
                 notify(msg)
                 log.info(f"Entry signal: {ticker} @ ${price:.2f}")
@@ -355,11 +350,10 @@ def run_backtest(ticker: str, period: str = "1y") -> str:
     for i in range(start_i, n):
         if not in_trade:
             ok_200  = close.iloc[i] > ma200.iloc[i]
-            ok_rsi  = float(rsi.iloc[i]) < 35
-            ok_macd = macd_line.iloc[i] > sig.iloc[i] and macd_line.iloc[i-1] <= sig.iloc[i-1]
+            ok_rsi  = 25 < float(rsi.iloc[i]) < 45
             ok_vol  = vol20.iloc[i] and volume.iloc[i] > 1.5 * vol20.iloc[i]
 
-            if ok_200 and ok_rsi and ok_macd and ok_vol:
+            if ok_200 and ok_rsi and ok_vol:
                 in_trade = True
                 entry_i  = i
                 entry_px = float(close.iloc[i])
