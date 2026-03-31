@@ -432,8 +432,106 @@ def run_backtest(ticker: str, period: str = "1y") -> str:
 
 last_update_id = 0
 
+BATCH_50 = [
+    "AAPL","MSFT","NVDA","AMZN","META","GOOGL","TSLA","BRK-B","AVGO","JPM",
+    "LLY","UNH","XOM","V","MA","HD","PG","COST","JNJ","ABBV",
+    "MRK","WMT","BAC","NFLX","CRM","CVX","KO","PEP","TMO","ACN",
+    "MCD","CSCO","ABT","LIN","DHR","TXN","NKE","PM","NEE","ADBE",
+    "ORCL","IBM","RTX","HON","QCOM","GE","LOW","AMGN","INTU","CAT"
+]
+
+def run_batch_backtest(tickers: list, period: str = "1y") -> str:
+    """Run backtest on multiple tickers and return ranked summary."""
+    results = []
+    for ticker in tickers:
+        try:
+            bars = get_daily_bars(ticker, period=period)
+            if bars is None or len(bars) < 50:
+                continue
+
+            close  = bars["close"]
+            volume = bars["volume"]
+            open_  = bars["open"]
+            n      = len(close)
+
+            rsi_diff = close.diff()
+            gain = rsi_diff.clip(lower=0).rolling(14).mean()
+            loss = (-rsi_diff.clip(upper=0)).rolling(14).mean()
+            rs   = gain / loss.replace(0, 1e-10)
+            rsi_full = 100 - (100 / (1 + rs))
+
+            ma50  = close.rolling(50).mean()
+            ma200 = close.rolling(min(200, n)).mean()
+            vol20 = volume.rolling(20).mean().shift(1)
+
+            PROFIT_PCT = float(os.environ.get("PROFIT_TARGET", "0.08"))
+            STOP_PCT   = float(os.environ.get("STOP_LOSS", "0.025"))
+            MAX_HOLD   = 10
+
+            trades = []
+            in_trade = False
+            entry_i = None
+            entry_px = None
+            start_i = min(205, n - 2)
+
+            for i in range(start_i, n):
+                if not in_trade:
+                    ok_cross     = ma50.iloc[i] > ma200.iloc[i]
+                    ok_200       = close.iloc[i] > ma200.iloc[i]
+                    ok_rsi       = 25 < float(rsi_full.iloc[i]) < 45
+                    ok_rsi_rising = float(rsi_full.iloc[i]) > float(rsi_full.iloc[i-1])
+                    ok_green     = close.iloc[i] > open_.iloc[i]
+                    ok_vol       = vol20.iloc[i] and volume.iloc[i] > 1.5 * vol20.iloc[i]
+
+                    if ok_cross and ok_200 and ok_rsi and ok_rsi_rising and ok_green and ok_vol:
+                        in_trade = True
+                        entry_i  = i
+                        entry_px = float(close.iloc[i])
+                else:
+                    pct  = (float(close.iloc[i]) - entry_px) / entry_px
+                    held = i - entry_i
+                    reason = None
+                    if pct >= PROFIT_PCT:  reason = "profit"
+                    elif pct <= -STOP_PCT: reason = "stop"
+                    elif held >= MAX_HOLD: reason = "timeout"
+                    if reason:
+                        trades.append({"pct": pct * 100, "reason": reason})
+                        in_trade = False
+
+            closed = [t for t in trades if t["reason"] != "open"]
+            if len(closed) < 2:
+                continue
+
+            wins     = [t for t in closed if t["pct"] > 0]
+            win_rate = len(wins) / len(closed) * 100
+            avg_ret  = sum(t["pct"] for t in closed) / len(closed)
+            results.append((ticker, win_rate, avg_ret, len(closed)))
+
+        except Exception as e:
+            log.warning(f"Batch backtest failed for {ticker}: {e}")
+            continue
+
+    if not results:
+        return "No results found. Try a longer period."
+
+    results.sort(key=lambda x: x[1], reverse=True)
+
+    lines = [f"BATCH BACKTEST ({period}) — top {len(results)} stocks"]
+    lines.append("─" * 36)
+    for ticker, wr, avg, n in results:
+        sign = "+" if avg >= 0 else ""
+        flag = " ✅" if wr >= 60 else ""
+        lines.append(f"{ticker:<6} {wr:.0f}%  {sign}{avg:.1f}% avg  {n}t{flag}")
+
+    above60 = [r for r in results if r[1] >= 60]
+    lines.append("─" * 36)
+    lines.append(f"{len(above60)}/{len(results)} stocks above 60% win rate")
+
+    return "\n".join(lines)
+
+
 def check_telegram_commands():
-    """Poll Telegram for incoming messages and handle /backtest commands."""
+    """Poll Telegram for incoming messages and handle commands."""
     global last_update_id
     try:
         url  = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/getUpdates?offset={last_update_id + 1}&timeout=5"
@@ -443,6 +541,7 @@ def check_telegram_commands():
             last_update_id = update["update_id"]
             msg = update.get("message", {})
             text = msg.get("text", "").strip()
+
             if text.lower().startswith("/backtest"):
                 parts = text.split()
                 ticker = parts[1].upper() if len(parts) > 1 else None
@@ -450,9 +549,27 @@ def check_telegram_commands():
                 if not ticker:
                     notify("Usage: /backtest TICKER PERIOD\nExample: /backtest AAPL 1y\nPeriods: 6mo, 1y, 2y")
                 else:
-                    notify(f"Running backtest for {ticker} ({period})... give me a moment.")
+                    notify(f"Running backtest for {ticker} ({period})...")
                     result = run_backtest(ticker, period)
                     notify(result)
+
+            elif text.lower().startswith("/batchtest"):
+                parts = text.split()
+                period = parts[1] if len(parts) > 1 and parts[1] in ["6mo","1y","2y"] else "1y"
+                notify(f"Running batch backtest on 50 tickers ({period})... this takes 2-3 minutes.")
+                result = run_batch_backtest(BATCH_50, period)
+                notify(result)
+
+            elif text.lower() == "/help":
+                notify(
+                    "Commands:\n"
+                    "/backtest TICKER PERIOD — backtest one stock\n"
+                    "/batchtest PERIOD — backtest top 50 stocks\n"
+                    "Periods: 6mo, 1y, 2y\n"
+                    "Example: /backtest NVDA 2y\n"
+                    "Example: /batchtest 2y"
+                )
+
     except Exception as e:
         log.warning(f"Telegram poll failed: {e}")
 
